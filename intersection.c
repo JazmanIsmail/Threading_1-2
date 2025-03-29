@@ -2,7 +2,7 @@
  * Operating Systems (2INC0) Practical Assignment
  * Threading
  *
- * Intersection Part 1
+ * Intersection Part 2
  * 
  * Joao Guilherme Cesse Valenca Calado de Freitas (1942395)
  * Dylan Galiart (1942115)
@@ -23,6 +23,9 @@
 
 // TODO: Global variables: mutexes, data structures, etc...
 pthread_mutex_t intersection_mutex = PTHREAD_MUTEX_INITIALIZER; // Intersection lock
+pthread_mutex_t* mtx_squares1 = PTHREAD_MUTEX_INITIALIZER; // Square lock 1
+pthread_mutex_t* mtx_squares2 = PTHREAD_MUTEX_INITIALIZER; // Square lock 2
+pthread_mutex_t* mtx_exit_lanes = PTHREAD_MUTEX_INITIALIZER; // Exit lane lock
 
 /* 
  * curr_car_arrivals[][][]
@@ -42,6 +45,12 @@ static Car_Arrival curr_car_arrivals[4][4][20];
  * The two indices determine the entry lane: first index is Side, second index is Direction
  */
 static sem_t car_sem[4][4];
+
+// Holds the mutexes for the intersection
+typedef struct {
+  pthread_mutex_t** mtx_squares;
+  pthread_mutex_t** mtx_exit_lanes;
+} Light_Input;
 
 /*
  * supply_cars()
@@ -85,6 +94,47 @@ static void* manage_light(void* arg)
   int direction = ((int*)arg)[1];
   free(arg); // Free allocated memory for arguments
 
+  int exit_lane = (side+direction+1) % 4;  // Calculate exit lane based on side and direction
+
+  // Mapping function
+  if((direction == 0) || (direction == 1)) {
+    int i = side*10 + direction;
+    switch (i) {
+      case 0: 
+        mtx_squares1 = args->m_squares[1];
+        mtx_squares2 = args->m_squares[3];
+      break;
+      case 1: 
+        mtx_squares1 = args->m_squares[0];
+        mtx_squares2 = args->m_squares[2];
+      break;
+      case 10: 
+        mtx_squares1 = args->m_squares[2];
+        mtx_squares2 = args->m_squares[3];
+      break;
+      case 11: 
+        mtx_squares1 = args->m_squares[0];
+        mtx_squares2 = args->m_squares[1];
+      break;
+      case 20: 
+        mtx_squares1 = args->m_squares[0];
+        mtx_squares2 = args->m_squares[2];
+      break;
+      case 21: 
+				mtx_squares1 = args->m_squares[1];
+				mtx_squares2 = args->m_squares[3];
+			break;
+      case 30: 
+        mtx_squares1 = args->m_squares[0];
+        mtx_squares2 = args->m_squares[1];
+      break;
+			case 31: 
+				mtx_squares1 = args->m_squares[2];
+				mtx_squares2 = args->m_squares[3];
+			break;
+    }
+  }
+
   while (1) {
       // Wait for a car to arrive at this light
       sem_wait(&car_sem[side][direction]);
@@ -95,6 +145,13 @@ static void* manage_light(void* arg)
 
       // Lock the intersection for exclusive access
       pthread_mutex_lock(&intersection_mutex);
+      // Lock the exit lane mutex
+      pthread_mutex_lock(&mtx_exit_lanes);
+      // Lock the squares mutexes
+      if((direction == 0) || (direction == 1)) {
+        pthread_mutex_lock(mtx_squares1);
+        pthread_mutex_lock(mtx_squares2);
+      }
 
       // Retrieve car details
       Car_Arrival car = curr_car_arrivals[side][direction];
@@ -110,6 +167,13 @@ static void* manage_light(void* arg)
 
       // Release the intersection
       pthread_mutex_unlock(&intersection_mutex);
+      // Release the exit lane mutex
+      pthread_mutex_unlock(&mtx_exit_lanes);
+      // Release the squares mutexes
+      if((direction == 0) || (direction == 1)) {
+        pthread_mutex_unlock(mtx_squares1);
+        pthread_mutex_unlock(mtx_squares2);
+      }
     }
   // TODO:
   // while not all arrivals have been handled, repeatedly:
@@ -126,6 +190,25 @@ static void* manage_light(void* arg)
 
 int main(int argc, char * argv[])
 {
+  pthread_mutex_t* mtxs_exit_lanes[4];
+	pthread_mutex_t mtx_exit_lanes[4];
+	pthread_mutex_t* mtxs_squares[4];
+	pthread_mutex_t mtx_squares[4];
+
+  // Initialize mutexes for exit lanes
+  for (int i = 0; i < 4; i++)
+  {
+    pthread_mutex_init(&mtx_exit_lanes[i], NULL);
+    mtxs_exit_lanes[i] = &mtx_exit_lanes[i];
+  }
+  
+  //Initialize mutexes for squares
+  for (int i = 0; i < 4; i++)
+  {
+    pthread_mutex_init(&mtx_squares[i], NULL);
+    mtxs_squares[i] = &mtx_squares[i];
+  }
+
   // create semaphores to wait/signal for arrivals
   for (int i = 0; i < 4; i++)
   {
@@ -152,6 +235,8 @@ int main(int argc, char * argv[])
           int* args = malloc(2 * sizeof(int));
           args[0] = side;
           args[1] = dir;
+          args[2] = mtxs_exit_lanes;
+          args[3] = mtxs_squares;
           pthread_create(&lights[side][dir], NULL, manage_light, args);
       }
   }
@@ -170,6 +255,19 @@ int main(int argc, char * argv[])
   // TODO: wait for all threads to finish
 
   // This was not done in Jaz's code so idk what to do here
+
+  // destroy mutexes
+  for (int i = 0; i < 4; i++)
+  {
+    pthread_mutex_destroy(&mtx_exit_lanes[i]);
+    pthread_mutex_destroy(&mtx_squares[i]);
+  }
+  // destroy mutexes
+  for (int i = 0; i < 4; i++)
+  {
+    free(mtxs_exit_lanes[i]);
+    free(mtxs_squares[i]);
+  }
 
   // destroy semaphores
   for (int i = 0; i < 4; i++)
