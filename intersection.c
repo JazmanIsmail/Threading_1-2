@@ -22,6 +22,7 @@
 #include "input.h"
 
 // TODO: Global variables: mutexes, data structures, etc...
+pthread_mutex_t intersection_mutex = PTHREAD_MUTEX_INITIALIZER; // Intersection lock
 
 /* 
  * curr_car_arrivals[][][]
