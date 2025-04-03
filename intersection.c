@@ -52,6 +52,7 @@
    int direction;
    pthread_mutex_t** mtx_squares;
    pthread_mutex_t** mtx_exit_lanes;
+   int current_index;  // Track the index of the next car to process
  } Light_Args;
  
  /*
@@ -93,9 +94,9 @@
  {
    // Extract side and direction from arguments
    Light_Args* args = (Light_Args*)arg;
-   int side = ((int*)arg)[0];
-   int direction = ((int*)arg)[1];
-   free(arg); // Free allocated memory for arguments
+   int side = args->side;
+   int direction = args->direction;
+   int current_index = args->current_index;
    pthread_mutex_t** mtx_squares = args->mtx_squares;
    pthread_mutex_t** mtx_exit_lanes = args->mtx_exit_lanes;
  
@@ -141,48 +142,47 @@
    }
  
    while (1) {
-       // Wait for a car to arrive at this light
-       sem_wait(&car_sem[side][direction]);
+     // Wait for a car to arrive at this light
+     sem_wait(&car_sem[side][direction]);
  
-       // Check if simulation time has ended
-       int current_time = get_time_passed();
-       if (current_time >= END_TIME) break;
+     // Check if simulation time has ended (FIRST DECLARATION)
+     int current_time = get_time_passed();
+     if (current_time >= END_TIME) break;
  
-       // Lock the intersection for exclusive access
-       pthread_mutex_lock(&intersection_mutex);
-       // Lock the exit lane mutex
-       pthread_mutex_lock(&mtx_exit_lanes);
-       // Lock the squares mutexes
-       if((direction == 0) || (direction == 1)) {
+     // Lock mutexes and process car
+     pthread_mutex_lock(&intersection_mutex);
+     pthread_mutex_lock(args->mtx_exit_lanes[exit_lane]);
+     if ((direction == 0) || (direction == 1)) {
          pthread_mutex_lock(mtx_squares1);
          pthread_mutex_lock(mtx_squares2);
-       }
+     }
  
-       static int current_index[4][4] = {0}; // Track per lane
+     // Retrieve car and update index
+     Car_Arrival car = curr_car_arrivals[side][direction][current_index];
+     current_index++;
+     args->current_index = current_index;
  
-       // Retrieve car details
-       Car_Arrival car = curr_car_arrivals[side][direction][current_index[side][direction]];
-       current_index[side][direction]++;
+     // Update time (no redefinition)
+     current_time = get_time_passed();
+     if (current_time >= END_TIME) break;
  
-       // Green light phase
-       printf("traffic light %d %d turns green at time %d for car %d\n", 
-               side, direction, current_time, car.id);
-       sleep(CROSS_TIME); // Simulate crossing time
+     // Green light phase
+     printf("traffic light %d %d turns green at time %d for car %d\n", 
+             side, direction, current_time, car.id);
+     sleep(CROSS_TIME);
  
-       // Red light phase
-       printf("traffic light %d %d turns red at time %d\n",
-               side, direction, get_time_passed());
+     // Red light phase
+     printf("traffic light %d %d turns red at time %d\n",
+             side, direction, get_time_passed());
  
-       // Release the intersection
-       pthread_mutex_unlock(&intersection_mutex);
-       // Release the exit lane mutex
-       pthread_mutex_unlock(&mtx_exit_lanes);
-       // Release the squares mutexes
-       if((direction == 0) || (direction == 1)) {
+     // Unlock mutexes
+     pthread_mutex_unlock(&intersection_mutex);
+     pthread_mutex_unlock(mtx_exit_lanes[exit_lane]);
+     if ((direction == 0) || (direction == 1)) {
          pthread_mutex_unlock(mtx_squares1);
          pthread_mutex_unlock(mtx_squares2);
-       }
      }
+ }
    // TODO:
    // while not all arrivals have been handled, repeatedly:
    //  - wait for an arrival using the semaphore for this traffic light
@@ -192,7 +192,8 @@
    //  - make the traffic light turn red
    //  - unlock the right mutex(es)
  
-   return(0);
+   free(args);
+   return NULL;
  }
  
  
@@ -207,13 +208,8 @@
    for (int i = 0; i < 4; i++)
    {
      pthread_mutex_init(&mtx_exit_lanes[i], NULL);
-     mtxs_exit_lanes[i] = &mtx_exit_lanes[i];
-   }
-   
-   //Initialize mutexes for squares
-   for (int i = 0; i < 4; i++)
-   {
      pthread_mutex_init(&mtx_squares[i], NULL);
+     mtxs_exit_lanes[i] = &mtx_exit_lanes[i];
      mtxs_squares[i] = &mtx_squares[i];
    }
  
@@ -245,6 +241,7 @@
            light_args->direction = dir;
            light_args->mtx_squares = mtxs_squares;
            light_args->mtx_exit_lanes = mtxs_exit_lanes;
+           light_args->current_index = 0;  // Initialize index
            pthread_create(&lights[side][dir], NULL, manage_light, light_args);
        }
    }

@@ -1,6 +1,8 @@
+#include <stdio.h>    // Add this line
 #include <stdlib.h>
 #include <unistd.h>
 #include <time.h>
+#include <errno.h> // Add this line
 
 #include "intersection_time.h"
 
@@ -14,11 +16,12 @@ void start_time()
 }
 
 
-void sleep_until_arrival(int timestamp)
-{
+void sleep_until_arrival(int timestamp) {
   struct timespec wait_time = begin_time;
   wait_time.tv_sec += timestamp;
-  clock_nanosleep(CLOCK_REALTIME, TIMER_ABSTIME, &wait_time, NULL);
+  if (clock_nanosleep(CLOCK_REALTIME, TIMER_ABSTIME, &wait_time, NULL) != 0) {
+      perror("clock_nanosleep"); // Handle errors
+  }
 }
 
 
