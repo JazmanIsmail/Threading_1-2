@@ -71,9 +71,8 @@
    {
      // get the next arrival in the list
      Car_Arrival arrival = input_car_arrivals[i];
-     // wait until this arrival is supposed to arrive
-     sleep(arrival.time - t);
-     t = arrival.time;
+      sleep_until_arrival(arrival.time); // Use the correct timing function
+      t = arrival.time;
      // store the new arrival in curr_arrivals
      curr_car_arrivals[arrival.side][arrival.direction][num_curr_arrivals[arrival.side][arrival.direction]] = arrival;
      num_curr_arrivals[arrival.side][arrival.direction] += 1;
@@ -81,7 +80,7 @@
      sem_post(&car_sem[arrival.side][arrival.direction]);
    }
  
-   return(0);
+   return NULL;
  }
  
  
@@ -90,128 +89,89 @@
   *
   * A function that implements the behaviour of a traffic light
   */
- static void* manage_light(void* arg)
- {
-   // Extract side and direction from arguments
-   Light_Args* args = (Light_Args*)arg;
-   int side = args->side;
-   int direction = args->direction;
-   int current_index = args->current_index;
-   pthread_mutex_t** mtx_squares = args->mtx_squares;
-   pthread_mutex_t** mtx_exit_lanes = args->mtx_exit_lanes;
- 
-   int exit_lane = (side+direction+1) % 4;  // Calculate exit lane based on side and direction
-   
-   // Mapping function
-   if((direction == 0) || (direction == 1)) {
-     int i = side*10 + direction;
-     switch (i) {
-       case 0: 
-         mtx_squares1 = mtx_squares[1];
-         mtx_squares2 = mtx_squares[3];
-       break;
-       case 1: 
-         mtx_squares1 = mtx_squares[0];
-         mtx_squares2 = mtx_squares[2];
-       break;
-       case 10: 
-         mtx_squares1 = mtx_squares[2];
-         mtx_squares2 = mtx_squares[3];
-       break;
-       case 11: 
-         mtx_squares1 = mtx_squares[0];
-         mtx_squares2 = mtx_squares[1];
-       break;
-       case 20: 
-         mtx_squares1 = mtx_squares[0];
-         mtx_squares2 = mtx_squares[2];
-       break;
-       case 21: 
-         mtx_squares1 = mtx_squares[1];
-         mtx_squares2 = mtx_squares[3];
-       break;
-       case 30: 
-         mtx_squares1 = mtx_squares[0];
-         mtx_squares2 = mtx_squares[1];
-       break;
-       case 31: 
-         mtx_squares1 = mtx_squares[2];
-         mtx_squares2 = mtx_squares[3];
-       break;
-     }
-   }
- 
-   while (1) {
-     // Wait for a car to arrive at this light
-     sem_wait(&car_sem[side][direction]);
- 
-     // Check if simulation time has ended (FIRST DECLARATION)
-     int current_time = get_time_passed();
-     if (current_time >= END_TIME) break;
- 
-     // Lock mutexes and process car
-     pthread_mutex_lock(&intersection_mutex);
-     pthread_mutex_lock(args->mtx_exit_lanes[exit_lane]);
-     if ((direction == 0) || (direction == 1)) {
-         pthread_mutex_lock(mtx_squares1);
-         pthread_mutex_lock(mtx_squares2);
-     }
- 
-     // Retrieve car and update index
-     Car_Arrival car = curr_car_arrivals[side][direction][current_index];
-     current_index++;
-     args->current_index = current_index;
- 
-     // Update time (no redefinition)
-     current_time = get_time_passed();
-     if (current_time >= END_TIME) break;
- 
-     // Green light phase
-     printf("traffic light %d %d turns green at time %d for car %d\n", 
-             side, direction, current_time, car.id);
-     sleep(CROSS_TIME);
- 
-     // Red light phase
-     printf("traffic light %d %d turns red at time %d\n",
-             side, direction, get_time_passed());
- 
-     // Unlock mutexes
-     pthread_mutex_unlock(&intersection_mutex);
-     pthread_mutex_unlock(mtx_exit_lanes[exit_lane]);
-     if ((direction == 0) || (direction == 1)) {
-         pthread_mutex_unlock(mtx_squares1);
-         pthread_mutex_unlock(mtx_squares2);
-     }
- }
-   // TODO:
-   // while not all arrivals have been handled, repeatedly:
-   //  - wait for an arrival using the semaphore for this traffic light
-   //  - lock the right mutex(es)
-   //  - make the traffic light turn green
-   //  - sleep for CROSS_TIME seconds
-   //  - make the traffic light turn red
-   //  - unlock the right mutex(es)
- 
-   free(args);
-   return NULL;
- }
+ static void* manage_light(void* arg) {
+  Light_Args* args = (Light_Args*)arg;
+  int side = args->side;
+  int direction = args->direction;
+  int current_index = args->current_index;
+  pthread_mutex_t** mtx_squares = args->mtx_squares;
+  pthread_mutex_t** mtx_exit_lanes = args->mtx_exit_lanes;
+
+  int exit_lane = (side + direction + 1) % 4;
+
+  // Determine which squares to lock based on direction and side
+  pthread_mutex_t* square1;
+  pthread_mutex_t* square2;
+
+  if (direction == LEFT || direction == STRAIGHT) {
+      // Example mapping for LEFT/STRAIGHT (adjust based on intersection layout)
+      square1 = mtx_squares[(side + 1) % 4]; // Next square
+      square2 = mtx_squares[(side + 2) % 4]; // Opposite square
+  } else if (direction == RIGHT) {
+      square1 = mtx_squares[side]; // Current square
+      square2 = mtx_squares[(side + 3) % 4]; // Previous square
+  } else { // UTURN
+      square1 = mtx_squares[side]; // Current square
+      square2 = mtx_squares[(side + 2) % 4]; // Opposite square
+  }
+
+  while (1) {
+      struct timespec timeout;
+      clock_gettime(CLOCK_REALTIME, &timeout);
+      int time_remaining = END_TIME - get_time_passed();
+      if (time_remaining <= 0) break;
+      timeout.tv_sec += time_remaining;
+
+      if (sem_timedwait(&car_sem[side][direction], &timeout) == -1) {
+          if (errno == ETIMEDOUT) break;
+          perror("sem_timedwait");
+          break;
+      }
+
+      int current_time = get_time_passed();
+      if (current_time >= END_TIME) break;
+
+      // Lock only specific squares and exit lane (NO GLOBAL MUTEX)
+      pthread_mutex_lock(mtx_exit_lanes[exit_lane]);
+      pthread_mutex_lock(square1);
+      pthread_mutex_lock(square2);
+
+      // Process car
+      Car_Arrival car = curr_car_arrivals[side][direction][current_index];
+      current_index++;
+      args->current_index = current_index;
+
+      printf("traffic light %d %d turns green at time %d for car %d\n", 
+              side, direction, current_time, car.id);
+      sleep(CROSS_TIME);
+      printf("traffic light %d %d turns red at time %d\n",
+              side, direction, get_time_passed());
+
+      // Unlock mutexes
+      pthread_mutex_unlock(square2);
+      pthread_mutex_unlock(square1);
+      pthread_mutex_unlock(mtx_exit_lanes[exit_lane]);
+  }
+
+  free(args);
+  return NULL;
+}
  
  
  int main(int argc, char * argv[])
  {
-   pthread_mutex_t* mtxs_exit_lanes[4];
-   pthread_mutex_t mtx_exit_lanes[4];
-   pthread_mutex_t* mtxs_squares[4];
-   pthread_mutex_t mtx_squares[4];
+  pthread_mutex_t mtx_squares[4]; // One mutex per square
+  pthread_mutex_t mtx_exit_lanes[4]; // One mutex per exit lane
+  pthread_mutex_t* mtxs_squares[4];
+  pthread_mutex_t* mtxs_exit_lanes[4];
  
    // Initialize mutexes for exit lanes
-   for (int i = 0; i < 4; i++)
-   {
-     pthread_mutex_init(&mtx_exit_lanes[i], NULL);
-     pthread_mutex_init(&mtx_squares[i], NULL);
-     mtxs_exit_lanes[i] = &mtx_exit_lanes[i];
-     mtxs_squares[i] = &mtx_squares[i];
-   }
+   for (int i = 0; i < 4; i++) {
+    pthread_mutex_init(&mtx_squares[i], NULL);
+    pthread_mutex_init(&mtx_exit_lanes[i], NULL);
+    mtxs_squares[i] = &mtx_squares[i];
+    mtxs_exit_lanes[i] = &mtx_exit_lanes[i];
+}
  
    // create semaphores to wait/signal for arrivals
    for (int i = 0; i < 4; i++)
@@ -221,7 +181,7 @@
        sem_init(&car_sem[i][j], 0, 0);
      }
    }
- 
+
    // start the timer
    start_time();
    
